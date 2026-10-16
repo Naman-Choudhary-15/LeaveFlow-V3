@@ -127,7 +127,7 @@ document.addEventListener("keydown", (event) => {
 
 async function api(url, method = "GET", body = null) {
   const options = { method, headers: { "Content-Type": "application/json" } };
-  if (currentUser) options.headers["x-username"] = currentUser.username;
+  if (currentUser?.token) options.headers.Authorization = `Bearer ${currentUser.token}`;
   if (body !== null) options.body = JSON.stringify(body);
   let response;
   try { response = await fetch(url, options); }
@@ -474,7 +474,7 @@ function dsaSort() {
   if (!saved) return;
   try {
     currentUser = JSON.parse(saved);
-    if (!currentUser?.username || !["student", "admin"].includes(currentUser.role)) throw new Error("Invalid session");
+    if (!currentUser?.username || !currentUser?.token || !["student", "admin"].includes(currentUser.role)) throw new Error("Invalid session");
     role = currentUser.role;
     await enterApp();
   } catch {
