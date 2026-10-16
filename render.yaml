@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: leaveflow-v3
+    runtime: node
+    plan: free
+    buildCommand: cd backend && npm ci
+    startCommand: cd backend && npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: LEAVEFLOW_STUDENT_PASSWORD
+        sync: false
+      - key: LEAVEFLOW_ADMIN_PASSWORD
+        sync: false
+
