@@ -1,10 +1,23 @@
 
 const express = require("express");
 const path = require("path");
+const fs = require("fs");
+const crypto = require("crypto");
 const { DatabaseSync } = require("node:sqlite");
 const app = express();
 const PORT = process.env.PORT || 3000;
-const db = new DatabaseSync(path.join(__dirname, "leaveflow.db"));
+const isProduction = process.env.NODE_ENV === "production";
+const requiredProductionEnv = ["SESSION_SECRET", "LEAVEFLOW_STUDENT_PASSWORD", "LEAVEFLOW_ADMIN_PASSWORD"];
+if (isProduction && requiredProductionEnv.some((key) => !process.env[key])) {
+  throw new Error(`Production requires these environment variables: ${requiredProductionEnv.join(", ")}`);
+}
+if (isProduction && [process.env.LEAVEFLOW_STUDENT_PASSWORD, process.env.LEAVEFLOW_ADMIN_PASSWORD].some((value) => value.length < 12)) {
+  throw new Error("Production student and administrator passwords must be at least 12 characters long");
+}
+const sessionSecret = process.env.SESSION_SECRET || "leaveflow-local-development-only-change-in-production";
+const dataDir = process.env.LEAVEFLOW_DATA_DIR || __dirname;
+fs.mkdirSync(dataDir, { recursive: true });
+const db = new DatabaseSync(path.join(dataDir, "leaveflow.db"));
 db.exec("PRAGMA journal_mode = WAL;");
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
@@ -40,9 +53,25 @@ CREATE TABLE IF NOT EXISTS history (
 );
 `);
 
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.scryptSync(password, salt, 64).toString("hex");
+  return `scrypt$${salt}$${hash}`;
+}
+function verifyPassword(password, stored) {
+  const [scheme, salt, hash] = String(stored || "").split("$");
+  if (scheme !== "scrypt" || !salt || !hash) return false;
+  const expected = Buffer.from(hash, "hex");
+  const actual = crypto.scryptSync(password, salt, expected.length);
+  return expected.length === actual.length && crypto.timingSafeEqual(actual, expected);
+}
+const updatePassword = db.prepare("UPDATE users SET password=? WHERE id=?");
+db.prepare("SELECT id,password FROM users").all().forEach((user) => {
+  if (!String(user.password).startsWith("scrypt$")) updatePassword.run(hashPassword(user.password), user.id);
+});
 const seedUser = db.prepare(`INSERT OR IGNORE INTO users(username,password,role,name,roll_no) VALUES(?,?,?,?,?)`);
-seedUser.run("student","1234","student","Naman Choudhary","2501331540177");
-seedUser.run("admin","admin123","admin","Administrator",null);
+seedUser.run("student",hashPassword(process.env.LEAVEFLOW_STUDENT_PASSWORD || "1234"),"student","Alex Morgan","DEMO-001");
+seedUser.run("admin",hashPassword(process.env.LEAVEFLOW_ADMIN_PASSWORD || "admin123"),"admin","Administrator",null);
 
 const count = db.prepare("SELECT COUNT(*) AS c FROM applications").get().c;
 if(count===0){
@@ -69,8 +98,8 @@ const ins = db.prepare(`
 ins.run(
   101,
   1,
-  "Naman Choudhary",
-  "2501331540177",
+  "Alex Morgan",
+  "DEMO-001",
   "Medical",
   "2026-09-15",
   "2026-09-17",
@@ -115,20 +144,38 @@ ins.run(
 app.use(express.json());
 app.use(express.static(path.join(__dirname,"..")));
 
+function createSessionToken(user) {
+  const payload = Buffer.from(JSON.stringify({ sub: user.id, exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 7 })).toString("base64url");
+  const signature = crypto.createHmac("sha256", sessionSecret).update(payload).digest("base64url");
+  return `${payload}.${signature}`;
+}
 function auth(req,res,next){
-  const username=req.headers["x-username"];
-  const user=db.prepare("SELECT id,username,role,name,roll_no FROM users WHERE username=?").get(username);
-  if(!user)return res.status(401).json({error:"Authentication required"});
+  const token = (req.headers.authorization || "").match(/^Bearer (.+)$/i)?.[1];
+  if (!token) return res.status(401).json({error:"Authentication required"});
+  const [payload, signature] = token.split(".");
+  if (!payload || !signature) return res.status(401).json({error:"Invalid session"});
+  const expected = crypto.createHmac("sha256", sessionSecret).update(payload).digest();
+  let supplied;
+  try { supplied = Buffer.from(signature, "base64url"); } catch { return res.status(401).json({error:"Invalid session"}); }
+  if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) return res.status(401).json({error:"Invalid session"});
+  let claims;
+  try { claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")); } catch { return res.status(401).json({error:"Invalid session"}); }
+  if (!Number.isInteger(claims.sub) || claims.exp <= Math.floor(Date.now() / 1000)) return res.status(401).json({error:"Session expired. Sign in again."});
+  const user = db.prepare("SELECT id,username,role,name,roll_no FROM users WHERE id=?").get(claims.sub);
+  if (!user) return res.status(401).json({error:"Invalid session"});
   req.user=user; next();
 }
 function admin(req,res,next){if(req.user.role!=="admin")return res.status(403).json({error:"Administrator access required"});next()}
 
 app.post("/api/login",(req,res)=>{
   const {username,password,role}=req.body||{};
-  const user=db.prepare("SELECT id,username,role,name,roll_no FROM users WHERE username=? AND password=? AND role=?").get(username,password,role);
-  if(!user)return res.status(401).json({error:"Invalid credentials"});
-  res.json(user);
+  const user=db.prepare("SELECT id,username,role,name,roll_no,password FROM users WHERE username=? AND role=?").get(username,role);
+  if(!user || typeof password !== "string" || !verifyPassword(password,user.password))return res.status(401).json({error:"Invalid credentials"});
+  delete user.password;
+  res.json({ ...user, token: createSessionToken(user) });
 });
+
+app.get("/api/health",(req,res)=>res.json({status:"ok"}));
 
 app.get("/api/applications",auth,(req,res)=>{
   const rows=req.user.role==="admin"
