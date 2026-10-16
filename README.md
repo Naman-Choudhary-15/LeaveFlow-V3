@@ -1,5 +1,8 @@
 # LeaveFlow V3 — Backend + Database
 
+## Live site
+[Open LeaveFlow](https://leaveflow-v3-6rzi.onrender.com/)
+
 ## What changed
 V3 replaces browser-only LocalStorage persistence with a Node.js/Express API and SQLite database.
 
@@ -35,7 +38,6 @@ SQLite file: `backend/leaveflow.db` (created automatically on first run).
 ## Academic note
 This prototype is for the DSA PBL. The local demo credentials are intentionally simple. Passwords are stored using Node.js scrypt hashing, and authenticated API requests use signed expiring tokens. Use a persistent database and review the security model before using real employee data.
 
-
 ## Deploy to Render
 
 1. Create a new Blueprint from this GitHub repository and select `render.yaml`.
@@ -43,4 +45,3 @@ This prototype is for the DSA PBL. The local demo credentials are intentionally 
 3. Deploy the `leaveflow-v3` web service and open its generated `onrender.com` URL.
 
 The included free preview uses SQLite on an ephemeral filesystem. Render may erase demo requests after a restart, spin-down, or redeploy. Persistent records require a persistent disk or a managed database and a paid/persistent hosting setup. Do not use real employee or student records in this preview.
-
